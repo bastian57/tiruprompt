@@ -31,11 +31,19 @@ object Storage {
     fun saveYoutubeKey(ctx: Context, v: String) =
         prefs(ctx).edit().putString("youtube_key", v.trim()).apply()
 
-    fun loadModelName(ctx: Context): String =
-        prefs(ctx).getString("model_name", "gemini-2.5-flash") ?: "gemini-2.5-flash"
+    // Model default AKTIF. gemini-2.5-flash sudah dimatikan Google untuk
+    // user baru (HTTP 404, kejadian 24 Okt 2026) — jangan turunkan lagi.
+    private const val DEFAULT_MODEL = "gemini-3.8-flash"
+    private const val DEAD_MODEL = "gemini-2.5-flash"
+
+    fun loadModelName(ctx: Context): String {
+        val v = prefs(ctx).getString("model_name", DEFAULT_MODEL) ?: DEFAULT_MODEL
+        // Migrasi diam-diam: nilai lama dari v1.0.0 yang sudah mati → ganti.
+        return if (v == DEAD_MODEL) DEFAULT_MODEL else v
+    }
 
     fun saveModelName(ctx: Context, v: String) =
-        prefs(ctx).edit().putString("model_name", v.trim().ifBlank { "gemini-2.5-flash" }).apply()
+        prefs(ctx).edit().putString("model_name", v.trim().ifBlank { DEFAULT_MODEL }).apply()
 
     fun loadRegion(ctx: Context): String = prefs(ctx).getString("region", "ID") ?: "ID"
     fun saveRegion(ctx: Context, v: String) =

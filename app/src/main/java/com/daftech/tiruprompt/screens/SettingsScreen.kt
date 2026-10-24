@@ -94,6 +94,6 @@ fun SettingsScreen(vm: AppViewModel) {
                 "dan hasilnya selalu dilabeli sebagai template — bukan analisa video asli.",
             fontSize = 12.sp, color = TpTextDim
         )
-        Text("TiruPrompt v1.0.0 • by DAFTECH", fontSize = 11.sp, color = TpTextDim)
+        Text("TiruPrompt v1.0.1 • by DAFTECH", fontSize = 11.sp, color = TpTextDim)
     }
 }

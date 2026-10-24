@@ -21,7 +21,10 @@ object GeminiAnalyzer {
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
-        .readTimeout(180, TimeUnit.SECONDS)
+        // Analisa video di server Gemini memang lambat (bisa menit) — batas
+        // baca dibuat longgar; dulu 180 dtk dan terbukti kena timeout di HP.
+        .readTimeout(300, TimeUnit.SECONDS)
+        .callTimeout(330, TimeUnit.SECONDS)
         .writeTimeout(60, TimeUnit.SECONDS)
         .build()
 
@@ -87,28 +90,54 @@ object GeminiAnalyzer {
             .put("temperature", 0.4)
             .put("maxOutputTokens", 8192))
 
+        var (code, text) = postGenerate(apiKey, model, body.toString())
+        if (code == -1 && text.contains("timeout", ignoreCase = true)) {
+            // Timeout sekali bukan vonis — server video Gemini memang lambat
+            // dan antre; coba sekali lagi sebelum menyerah.
+            val retry = postGenerate(apiKey, model, body.toString())
+            code = retry.first; text = retry.second
+        }
+        if (code == -1) return Outcome.Fail(
+            if (text.contains("timeout", ignoreCase = true))
+                "Gagal menghubungi Gemini: timeout — server lama memproses video ini, atau sinyal putus di tengah jalan. Coba lagi; untuk tes, pakai video ≤60 detik dulu."
+            else "Gagal menghubungi Gemini: $text"
+        )
+        if (code == 404) {
+            // Google kadang mematikan model untuk user baru dan MENYARANKAN
+            // penggantinya di pesan error — ikuti sarannya, coba sekali lagi.
+            val saran = Regex("use models/([A-Za-z0-9._-]+)").find(text)?.groupValues?.get(1)
+            if (!saran.isNullOrBlank() && saran != model) {
+                val (code2, text2) = postGenerate(apiKey, saran, body.toString())
+                if (code2 == -1) return Outcome.Fail("Gagal menghubungi Gemini: $text2")
+                code = code2; text = text2
+            }
+        }
+        if (code !in 200..299) {
+            return Outcome.Fail("Gemini menolak (HTTP $code). Cek API key / kuota di Setting. Detail: ${text.take(220)}")
+        }
+        val root = try { JSONObject(text) } catch (e: Exception) {
+            return Outcome.Fail("Jawaban Gemini tidak terbaca. Coba ulangi.")
+        }
+        val candidates = root.optJSONArray("candidates")
+        val first = candidates?.optJSONObject(0)
+            ?: return Outcome.Fail("Gemini tidak mengembalikan kandidat jawaban. Coba ulangi.")
+        val outText = first.optJSONObject("content")?.optJSONArray("parts")
+            ?.optJSONObject(0)?.optString("text").orEmpty()
+        if (outText.isBlank()) return Outcome.Fail("Jawaban Gemini kosong. Coba ulangi.")
+        return parseResult(outText, link, youtubeId, mode, target)
+    }
+
+    /** Satu panggilan HTTP ke generateContent. Return (httpCode, bodyText); code -1 = gagal jaringan, bodyText = pesan error. */
+    private fun postGenerate(apiKey: String, model: String, bodyJson: String): Pair<Int, String> {
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent?key=$apiKey"
         val req = Request.Builder()
             .url(url)
-            .post(body.toString().toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .post(bodyJson.toRequestBody("application/json; charset=utf-8".toMediaType()))
             .build()
         return try {
-            client.newCall(req).execute().use { resp ->
-                val text = resp.body?.string().orEmpty()
-                if (!resp.isSuccessful) {
-                    return Outcome.Fail("Gemini menolak (HTTP ${resp.code}). Cek API key / kuota di Setting. Detail: ${text.take(220)}")
-                }
-                val root = JSONObject(text)
-                val candidates = root.optJSONArray("candidates")
-                val first = candidates?.optJSONObject(0)
-                    ?: return Outcome.Fail("Gemini tidak mengembalikan kandidat jawaban. Coba ulangi.")
-                val outText = first.optJSONObject("content")?.optJSONArray("parts")
-                    ?.optJSONObject(0)?.optString("text").orEmpty()
-                if (outText.isBlank()) return Outcome.Fail("Jawaban Gemini kosong. Coba ulangi.")
-                parseResult(outText, link, youtubeId, mode, target)
-            }
+            client.newCall(req).execute().use { resp -> resp.code to (resp.body?.string().orEmpty()) }
         } catch (e: Exception) {
-            Outcome.Fail("Gagal menghubungi Gemini: ${e.message ?: "jaringan bermasalah"}")
+            -1 to (e.message ?: "jaringan bermasalah")
         }
     }
 
